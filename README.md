@@ -1,73 +1,180 @@
-# React + TypeScript + Vite
+# Tracky
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Tracky est une PWA calendrier privée pour deux personnes, construite avec React, TypeScript, Vite et Supabase.
 
-Currently, two official plugins are available:
+## Backend Supabase
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Le backend attendu par l’application est défini dans [supabase/migrations/001_tracky_backend.sql](supabase/migrations/001_tracky_backend.sql).
 
-## React Compiler
+Ce script crée:
+- la table `public.events`
+- les index utiles
+- les politiques RLS pour l’utilisateur connecté
+- le trigger `updated_at`
+- l’ajout de `public.events` à `supabase_realtime`
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Ce qu’il faut configurer dans Supabase
 
-## Expanding the ESLint configuration
+- Activer l’auth email/mot de passe dans Supabase Auth.
+- Créer les deux comptes `adam@tracky.app` et `sofiane@tracky.app`.
+- Exécuter le SQL de migration dans l’éditeur SQL Supabase.
+- Vérifier que `public.events` est bien exposée au realtime.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Test automatique du backend
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+Le plus simple est d’utiliser le script local prévu pour ça:
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run test:backend
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Variables d’environnement requises:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+- `TRACKY_TEST_EMAIL`
+- `TRACKY_TEST_PASSWORD`
+- `SUPABASE_URL` ou `VITE_SUPABASE_URL`
+- `SUPABASE_ANON_KEY` ou `VITE_SUPABASE_ANON_KEY`
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+Exemple PowerShell:
+
+```powershell
+$env:TRACKY_TEST_EMAIL="adam@tracky.app"
+$env:TRACKY_TEST_PASSWORD="ton-mot-de-passe"
+$env:SUPABASE_URL="https://bzqaixheecoqhuzqhhpz.supabase.co/rest/v1/"
+$env:SUPABASE_ANON_KEY="<anon-key>"
+npm run test:backend
+```
+
+Le script teste automatiquement:
+
+- la connexion Auth
+- `GET /rest/v1/events`
+- `POST /rest/v1/events`
+- `PATCH /rest/v1/events`
+- `DELETE /rest/v1/events`
+
+## Test avec Postman
+
+Tu peux aussi tester le backend directement via l’API REST PostgREST de Supabase.
+
+### 1. Se connecter et récupérer un token
+
+Fais un `POST` vers:
+
+```http
+https://bzqaixheecoqhuzqhhpz.supabase.co/auth/v1/token?grant_type=password
+```
+
+Headers:
+
+```http
+apikey: <VITE_SUPABASE_ANON_KEY>
+Content-Type: application/json
+```
+
+Body:
+
+```json
+{
+  "email": "adam@tracky.app",
+  "password": "ton-pin-ou-mot-de-passe"
+}
+```
+
+Récupère `access_token` dans la réponse.
+
+### 2. Lire les événements du jour
+
+Fais un `GET` vers:
+
+```http
+https://bzqaixheecoqhuzqhhpz.supabase.co/rest/v1/events?select=*&user_id=eq.<USER_UUID>&created_at=gte.2026-06-01T00:00:00Z&created_at=lt.2026-06-02T00:00:00Z&order=created_at.asc
+```
+
+Headers:
+
+```http
+apikey: <VITE_SUPABASE_ANON_KEY>
+Authorization: Bearer <access_token>
+Accept: application/json
+```
+
+### 3. Créer un événement
+
+Fais un `POST` vers:
+
+```http
+https://bzqaixheecoqhuzqhhpz.supabase.co/rest/v1/events
+```
+
+Headers:
+
+```http
+apikey: <VITE_SUPABASE_ANON_KEY>
+Authorization: Bearer <access_token>
+Content-Type: application/json
+Prefer: return=representation
+```
+
+Body:
+
+```json
+{
+  "user_id": "<USER_UUID>",
+  "title": "Rendez-vous",
+  "created_at": "2026-06-01T14:00:00.000Z"
+}
+```
+
+### 4. Modifier un événement
+
+Fais un `PATCH` vers:
+
+```http
+https://bzqaixheecoqhuzqhhpz.supabase.co/rest/v1/events?id=eq.<EVENT_UUID>
+```
+
+Headers:
+
+```http
+apikey: <VITE_SUPABASE_ANON_KEY>
+Authorization: Bearer <access_token>
+Content-Type: application/json
+Prefer: return=representation
+```
+
+Body:
+
+```json
+{
+  "title": "Rendez-vous mis à jour",
+  "created_at": "2026-06-01T15:00:00.000Z"
+}
+```
+
+### 5. Supprimer un événement
+
+Fais un `DELETE` vers:
+
+```http
+https://bzqaixheecoqhuzqhhpz.supabase.co/rest/v1/events?id=eq.<EVENT_UUID>
+```
+
+Headers:
+
+```http
+apikey: <VITE_SUPABASE_ANON_KEY>
+Authorization: Bearer <access_token>
+```
+
+## Lancer l’app
+
+```bash
+npm run dev
+```
+
+## Vérifier la build
+
+```bash
+npm run build
 ```
