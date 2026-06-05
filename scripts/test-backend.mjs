@@ -95,6 +95,8 @@ async function main() {
     body: JSON.stringify({
       user_id: userId,
       title: createTitle,
+      start_date: createCreatedAt,
+      end_date: createCreatedAt,
       created_at: createCreatedAt,
     }),
   })
@@ -115,6 +117,8 @@ async function main() {
     },
     body: JSON.stringify({
       title: updatedTitle,
+      start_date: updatedCreatedAt,
+      end_date: updatedCreatedAt,
       created_at: updatedCreatedAt,
     }),
   })

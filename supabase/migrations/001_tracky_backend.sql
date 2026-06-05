@@ -4,12 +4,17 @@ create table if not exists public.events (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   title text not null,
+  start_date timestamptz not null default timezone('utc', now()),
+  end_date timestamptz not null default timezone('utc', now()),
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
 );
 
 create index if not exists events_user_id_created_at_idx
   on public.events (user_id, created_at desc);
+
+create index if not exists events_user_id_start_date_idx
+  on public.events (user_id, start_date desc);
 
 alter table public.events enable row level security;
 

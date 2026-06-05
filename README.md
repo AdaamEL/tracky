@@ -8,6 +8,7 @@ Le backend attendu par l’application est défini dans [supabase/migrations/001
 
 Ce script crée:
 - la table `public.events`
+- les colonnes `start_date` et `end_date`
 - les index utiles
 - les politiques RLS pour l’utilisateur connecté
 - le trigger `updated_at`
@@ -122,6 +123,8 @@ Body:
 {
   "user_id": "<USER_UUID>",
   "title": "Rendez-vous",
+  "start_date": "2026-06-01T14:00:00.000Z",
+  "end_date": "2026-06-01T14:00:00.000Z",
   "created_at": "2026-06-01T14:00:00.000Z"
 }
 ```
@@ -148,6 +151,8 @@ Body:
 ```json
 {
   "title": "Rendez-vous mis à jour",
+  "start_date": "2026-06-01T15:00:00.000Z",
+  "end_date": "2026-06-01T15:00:00.000Z",
   "created_at": "2026-06-01T15:00:00.000Z"
 }
 ```

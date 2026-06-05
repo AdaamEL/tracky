@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { fr } from 'date-fns/locale/fr'
 import {
   ArrowRight,
+  Bell,
   CalendarDays,
   Clock3,
   Loader2,
@@ -20,6 +21,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Drawer, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Input } from '@/components/ui/input'
 import { createEvent, deleteEvent, fetchEventsByDate, type TrackyEvent, updateEvent } from '@/lib/events'
+import { registerServiceWorker, saveSubscription, subscribeToPush } from '@/lib/notifications'
 import { supabase } from '@/lib/supabase'
 
 type Profile = {
@@ -81,6 +83,8 @@ function App() {
   const [editingEventId, setEditingEventId] = useState<string | null>(null)
   const [editingEventDateKey, setEditingEventDateKey] = useState<string | null>(null)
   const [activeView, setActiveView] = useState<'calendar' | 'today'>('calendar')
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission>('default')
+  const [eventNotifOffset, setEventNotifOffset] = useState(15)
 
   const today = new Date()
   const todayKey = dateKeyFromDate(today)
@@ -115,6 +119,26 @@ function App() {
       mounted = false
     }
   }, [sessionUser, visibleDateKey])
+
+  useEffect(() => {
+    if ('Notification' in window) setNotifPermission(Notification.permission)
+  }, [])
+
+  useEffect(() => {
+    if (sessionUser) registerServiceWorker()
+  }, [sessionUser])
+
+  const handleEnableNotifications = async () => {
+    if (!sessionUser) return
+    const registration = await registerServiceWorker()
+    if (!registration) return
+    const permission = await Notification.requestPermission()
+    setNotifPermission(permission)
+    if (permission !== 'granted') return
+    const vapidKey = import.meta.env.VITE_VAPID_PUBLIC_KEY as string
+    const sub = await subscribeToPush(registration, vapidKey)
+    if (sub) await saveSubscription(supabase, sessionUser.id, sub)
+  }
 
   useEffect(() => {
     let isMounted = true
@@ -215,6 +239,7 @@ function App() {
     setEditingEventDateKey(null)
     setEventTitle('')
     setEventTime('12:00')
+    setEventNotifOffset(15)
     setEventDialogOpen(true)
   }
 
@@ -223,6 +248,7 @@ function App() {
     setEditingEventDateKey(event.created_at ? dateKeyFromDate(new Date(event.created_at)) : visibleDateKey)
     setEventTitle(event.title)
     setEventTime(formatEventTime(event.created_at))
+    setEventNotifOffset(event.notification_offset_minutes ?? 15)
     setEventDialogOpen(true)
   }
 
@@ -255,15 +281,24 @@ function App() {
                 Duo privé
               </div>
               {hasSession ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleSignOut}
-                  className="rounded-full border border-white/10 bg-white/5 px-3 text-slate-200 hover:bg-white/10 hover:text-white"
-                >
-                  <LogOut className="mr-2 size-3.5" />
-                  Sortie
-                </Button>
+                <>
+                  <button
+                    onClick={handleEnableNotifications}
+                    title={notifPermission === 'granted' ? 'Notifications activées' : 'Activer les notifications'}
+                    className="rounded-full border border-white/10 bg-white/5 p-2 text-slate-300 hover:bg-white/10 hover:text-white"
+                  >
+                    <Bell className={`size-3.5 ${notifPermission === 'granted' ? 'text-cyan-300' : ''}`} />
+                  </button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleSignOut}
+                    className="rounded-full border border-white/10 bg-white/5 px-3 text-slate-200 hover:bg-white/10 hover:text-white"
+                  >
+                    <LogOut className="mr-2 size-3.5" />
+                    Sortie
+                  </Button>
+                </>
               ) : null}
             </div>
           </header>
@@ -528,6 +563,19 @@ function App() {
             <Input value={eventTitle} onChange={(e) => setEventTitle(e.target.value)} placeholder="Titre de l'événement" className="h-11 rounded-2xl border-white/10 bg-white/5 text-white placeholder:text-slate-500 focus-visible:ring-cyan-400/30" />
             <label className="text-xs text-slate-400">Heure</label>
             <Input value={eventTime} onChange={(e) => setEventTime(e.target.value)} type="time" className="h-11 w-full rounded-2xl border-white/10 bg-white/5 text-white focus-visible:ring-cyan-400/30" />
+            <label className="text-xs text-slate-400">Rappel</label>
+            <div className="grid grid-cols-4 gap-2">
+              {([5, 15, 30, 60] as const).map((min) => (
+                <button
+                  key={min}
+                  type="button"
+                  onClick={() => setEventNotifOffset(min)}
+                  className={`rounded-xl border py-2 text-xs transition-colors ${eventNotifOffset === min ? 'border-cyan-400/40 bg-cyan-400/15 text-cyan-100' : 'border-white/10 bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200'}`}
+                >
+                  {min < 60 ? `${min} min` : '1 heure'}
+                </button>
+              ))}
+            </div>
           </div>
 
           <DialogFooter className="border-white/10 bg-white/5">
@@ -540,14 +588,15 @@ function App() {
                 if (!sessionUser || !targetDateKey) return
 
                 if (editingEventId) {
-                  await updateEvent(editingEventId, eventTitle || 'Nouvel événement', targetDateKey, eventTime)
+                  await updateEvent(editingEventId, eventTitle || 'Nouvel événement', targetDateKey, eventTime, eventNotifOffset)
                 } else {
-                  await createEvent(sessionUser.id, eventTitle || 'Nouvel événement', targetDateKey, eventTime)
+                  await createEvent(sessionUser.id, eventTitle || 'Nouvel événement', targetDateKey, eventTime, eventNotifOffset)
                 }
 
                 await refetchVisibleEvents()
                 setEventTitle('')
                 setEventTime('12:00')
+                setEventNotifOffset(15)
                 setEditingEventId(null)
                 setEditingEventDateKey(null)
                 setEventDialogOpen(false)

@@ -4,7 +4,10 @@ export type TrackyEvent = {
   id: string
   user_id: string
   title: string
+  start_date?: string | null
+  end_date?: string | null
   created_at?: string | null
+  notification_offset_minutes?: number | null
 }
 
 function buildDateTimeIso(date: string, time: string) {
@@ -32,10 +35,27 @@ export async function fetchEventsByDate(userId: string, date: string) {
   return (data ?? []) as TrackyEvent[]
 }
 
-export async function createEvent(userId: string, title: string, date: string, time = '12:00') {
+export async function createEvent(
+  userId: string,
+  title: string,
+  date: string,
+  time = '12:00',
+  offsetMinutes = 15,
+) {
+  const timestamp = buildDateTimeIso(date, time)
+
   const { data, error } = await supabase
     .from('events')
-    .insert([{ user_id: userId, title, created_at: buildDateTimeIso(date, time) }])
+    .insert([
+      {
+        user_id: userId,
+        title,
+        start_date: timestamp,
+        end_date: timestamp,
+        created_at: timestamp,
+        notification_offset_minutes: offsetMinutes,
+      },
+    ])
     .select()
     .single()
 
@@ -43,10 +63,25 @@ export async function createEvent(userId: string, title: string, date: string, t
   return data as TrackyEvent
 }
 
-export async function updateEvent(id: string, title: string, date: string, time = '12:00') {
+export async function updateEvent(
+  id: string,
+  title: string,
+  date: string,
+  time = '12:00',
+  offsetMinutes = 15,
+) {
+  const timestamp = buildDateTimeIso(date, time)
+
   const { data, error } = await supabase
     .from('events')
-    .update({ title, created_at: buildDateTimeIso(date, time) })
+    .update({
+      title,
+      start_date: timestamp,
+      end_date: timestamp,
+      created_at: timestamp,
+      notification_offset_minutes: offsetMinutes,
+      notified_at: null,
+    })
     .eq('id', id)
     .select()
     .single()
