@@ -1,6 +1,6 @@
 {
   "imports": {
-    "web-push": "npm:web-push",
+    "nodemailer": "npm:nodemailer",
     "@supabase/supabase-js": "npm:@supabase/supabase-js@2"
   }
 }

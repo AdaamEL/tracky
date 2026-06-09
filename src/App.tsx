@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { fr } from 'date-fns/locale/fr'
 import {
+  AlertTriangle,
   ArrowRight,
-  Bell,
   CalendarDays,
   Clock3,
   Loader2,
@@ -10,9 +10,11 @@ import {
   LogOut,
   Pencil,
   Plus,
+  Search,
   Sparkles,
   Trash2,
   Users,
+  X,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -20,8 +22,7 @@ import { Calendar } from '@/components/ui/calendar'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Drawer, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Input } from '@/components/ui/input'
-import { createEvent, deleteEvent, fetchEventsByDate, type TrackyEvent, updateEvent } from '@/lib/events'
-import { registerServiceWorker, saveSubscription, subscribeToPush } from '@/lib/notifications'
+import { createEvent, deleteEvent, fetchEventsByDate, getConflictingEvents, searchEvents, type TrackyEvent, updateEvent } from '@/lib/events'
 import { supabase } from '@/lib/supabase'
 
 type Profile = {
@@ -86,8 +87,15 @@ function App() {
   const [editingEventId, setEditingEventId] = useState<string | null>(null)
   const [editingEventDateKey, setEditingEventDateKey] = useState<string | null>(null)
   const [activeView, setActiveView] = useState<'calendar' | 'today'>('calendar')
-  const [notifPermission, setNotifPermission] = useState<NotificationPermission>('default')
   const [eventNotifOffset, setEventNotifOffset] = useState(15)
+
+  // Search
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<TrackyEvent[]>([])
+  const [isSearchLoading, setIsSearchLoading] = useState(false)
+
+  // Conflict detection
+  const [conflictingEvents, setConflictingEvents] = useState<TrackyEvent[]>([])
 
   const today = new Date()
   const todayKey = dateKeyFromDate(today)
@@ -118,30 +126,6 @@ function App() {
     loadEvents()
     return () => { mounted = false }
   }, [sessionUser, visibleDateKey])
-
-  useEffect(() => {
-    if ('Notification' in window) setNotifPermission(Notification.permission)
-  }, [])
-
-  useEffect(() => {
-    if (sessionUser) registerServiceWorker()
-  }, [sessionUser])
-
-  const handleEnableNotifications = async () => {
-    if (!sessionUser) return
-    const registration = await registerServiceWorker()
-    if (!registration) return
-    const permission = await Notification.requestPermission()
-    setNotifPermission(permission)
-    if (permission !== 'granted') return
-    const vapidKey = import.meta.env.VITE_VAPID_PUBLIC_KEY as string
-    try {
-      const sub = await subscribeToPush(registration, vapidKey)
-      if (sub) await saveSubscription(supabase, sessionUser.id, sub)
-    } catch (err) {
-      console.error('[Tracky] Notification setup failed:', err)
-    }
-  }
 
   useEffect(() => {
     let isMounted = true
@@ -191,6 +175,44 @@ function App() {
 
     return () => { supabase.removeChannel(channel) }
   }, [sessionUser, visibleDateKey])
+
+  // Search debounce
+  useEffect(() => {
+    if (!sessionUser || !searchQuery.trim()) {
+      setSearchResults([])
+      setIsSearchLoading(false)
+      return
+    }
+    setIsSearchLoading(true)
+    const timer = setTimeout(async () => {
+      try {
+        const results = await searchEvents(sessionUser.id, searchQuery)
+        setSearchResults(results)
+      } catch (err) {
+        console.error('Search failed', err)
+      } finally {
+        setIsSearchLoading(false)
+      }
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [sessionUser, searchQuery])
+
+  // Conflict detection
+  useEffect(() => {
+    if (!sessionUser || !eventDialogOpen || !visibleDateKey || !eventTime) {
+      setConflictingEvents([])
+      return
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const conflicts = await getConflictingEvents(sessionUser.id, visibleDateKey, eventTime, editingEventId)
+        setConflictingEvents(conflicts)
+      } catch (err) {
+        console.error('Conflict check failed', err)
+      }
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [sessionUser, eventDialogOpen, visibleDateKey, eventTime, editingEventId])
 
   const openProfile = (profile: Profile) => {
     setActiveProfile(profile)
@@ -287,25 +309,15 @@ function App() {
                 Duo privé
               </div>
               {hasSession ? (
-                <>
-                  <button
-                    onClick={handleEnableNotifications}
-                    title={notifPermission === 'granted' ? 'Notifications activées' : 'Activer les notifications'}
-                    className="cursor-pointer rounded-full border border-stone-200 bg-stone-50/80 p-2 text-stone-500 transition-all duration-200 hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-600 active:scale-95"
-                    aria-label={notifPermission === 'granted' ? 'Notifications activées' : 'Activer les notifications'}
-                  >
-                    <Bell className={`size-3.5 ${notifPermission === 'granted' ? 'text-emerald-600' : ''}`} />
-                  </button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleSignOut}
-                    className="cursor-pointer rounded-full border border-stone-200 bg-stone-50/80 px-3 text-stone-600 transition-all duration-200 hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600"
-                  >
-                    <LogOut className="mr-1.5 size-3.5" />
-                    Sortie
-                  </Button>
-                </>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleSignOut}
+                  className="cursor-pointer rounded-full border border-stone-200 bg-stone-50/80 px-3 text-stone-600 transition-all duration-200 hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600"
+                >
+                  <LogOut className="mr-1.5 size-3.5" />
+                  Sortie
+                </Button>
               ) : null}
             </div>
           </header>
@@ -387,13 +399,94 @@ function App() {
 
               {/* Events list */}
               <div>
+                {/* Search bar */}
+                <div className="relative mb-3">
+                  <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-stone-400" />
+                  <Input
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Rechercher un événement…"
+                    className="h-10 rounded-2xl border-stone-200 bg-stone-50 pl-9 pr-9 text-sm placeholder:text-stone-300 focus-visible:border-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-200/50"
+                  />
+                  {searchQuery ? (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer text-stone-400 hover:text-stone-600"
+                    >
+                      <X className="size-4" />
+                    </button>
+                  ) : null}
+                </div>
+
                 <div className="mb-3 flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-stone-700">{eventLabel}</h3>
+                  <h3 className="text-sm font-semibold text-stone-700">
+                    {searchQuery.trim() ? `Résultats pour « ${searchQuery.trim()} »` : eventLabel}
+                  </h3>
                   <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-0.5 text-[0.68rem] font-medium text-stone-500">
-                    {eventCount} élément{eventCount !== 1 ? 's' : ''}
+                    {searchQuery.trim() ? `${searchResults.length} résultat${searchResults.length !== 1 ? 's' : ''}` : `${eventCount} élément${eventCount !== 1 ? 's' : ''}`}
                   </span>
                 </div>
 
+                {searchQuery.trim() ? (
+                  <div className="space-y-2">
+                    {isSearchLoading ? (
+                      <div className="flex items-center justify-center py-6">
+                        <Loader2 className="size-5 animate-spin text-stone-400" />
+                      </div>
+                    ) : searchResults.length === 0 ? (
+                      <div className="rounded-[1.2rem] border border-stone-100 bg-stone-50/60 p-4 text-sm text-stone-400">
+                        Aucun résultat pour cette recherche.
+                      </div>
+                    ) : (
+                      searchResults.map((ev, index) => (
+                        <div
+                          key={ev.id}
+                          className="group tracky-rise rounded-[1.2rem] border border-stone-100 bg-white p-3.5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
+                          style={{ animationDelay: `${index * 45}ms` }}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 space-y-1.5">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-[0.7rem] font-semibold text-emerald-700 ring-1 ring-emerald-200/60">
+                                  {formatEventTime(ev.start_date)}
+                                </span>
+                                <span className="text-[0.66rem] font-medium uppercase tracking-[0.2em] text-stone-400">
+                                  {ev.start_date ? new Date(ev.start_date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }) : ''}
+                                </span>
+                              </div>
+                              <div className="truncate text-sm font-semibold text-stone-800">{ev.title}</div>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-1">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="cursor-pointer size-8 rounded-full text-stone-400 transition-colors hover:bg-emerald-50 hover:text-emerald-600"
+                                onClick={() => openEditDialog(ev)}
+                                aria-label="Modifier l'événement"
+                              >
+                                <Pencil className="size-3.5" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="cursor-pointer size-8 rounded-full text-stone-400 transition-colors hover:bg-rose-50 hover:text-rose-500"
+                                onClick={async () => {
+                                  await deleteEvent(ev.id)
+                                  setSearchResults(prev => prev.filter(r => r.id !== ev.id))
+                                  await refetchVisibleEvents()
+                                }}
+                                aria-label="Supprimer l'événement"
+                              >
+                                <Trash2 className="size-3.5" />
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                ) : (
                 <div className="space-y-2">
                   {events.length === 0 ? (
                     <div className="rounded-[1.2rem] border border-stone-100 bg-stone-50/60 p-4 text-sm text-stone-400">
@@ -448,6 +541,7 @@ function App() {
                     ))
                   )}
                 </div>
+                )}
               </div>
             </div>
 
@@ -514,7 +608,7 @@ function App() {
       {hasSession ? (
         <div>
           {/* FAB */}
-          <div className="fixed bottom-24 left-0 right-0 z-50 flex items-center justify-center sm:bottom-28">
+          <div className="fixed left-0 right-0 z-50 flex items-center justify-center" style={{ bottom: 'calc(5rem + env(safe-area-inset-bottom, 0px))' }}>
             <button
               onClick={openCreateDialog}
               className="inline-flex size-14 cursor-pointer items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-emerald-700 text-white shadow-[0_6px_22px_rgba(77,133,85,0.42)] transition-all duration-200 hover:scale-105 hover:shadow-[0_10px_28px_rgba(77,133,85,0.48)] active:scale-95"
@@ -525,7 +619,7 @@ function App() {
           </div>
 
           {/* Bottom navigation */}
-          <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-stone-200/80 bg-white/92 p-3 backdrop-blur-xl">
+          <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-stone-200/80 bg-white/92 px-3 pt-3 backdrop-blur-xl" style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 12px)' }}>
             <div className="mx-auto flex w-full max-w-md items-center gap-1.5 rounded-[1.3rem] border border-stone-100 bg-stone-50/60 p-1.5">
               <Button
                 onClick={() => setActiveView('calendar')}
@@ -643,6 +737,15 @@ function App() {
               type="time"
               className="h-11 w-full rounded-2xl border-stone-200 bg-stone-50 text-stone-900 focus-visible:border-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-200/50"
             />
+            {conflictingEvents.length > 0 ? (
+              <div className="flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 px-3.5 py-3">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+                <div className="text-xs leading-relaxed text-amber-800">
+                  <span className="font-semibold">Conflit détecté.</span>{' '}
+                  {conflictingEvents.map(e => e.title).join(', ')} est dans la même fenêtre de 30 min.
+                </div>
+              </div>
+            ) : null}
             <label className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Rappel</label>
             <div className="grid grid-cols-4 gap-2">
               {([5, 15, 30, 60] as const).map((min) => (

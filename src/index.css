@@ -40,6 +40,7 @@
   body {
     margin: 0;
     min-height: 100vh;
+    min-height: 100dvh;
     background:
       radial-gradient(circle at 15% 0%, rgba(122, 172, 128, 0.18), transparent 38%),
       radial-gradient(circle at 88% 8%, rgba(196, 176, 140, 0.15), transparent 28%),
@@ -48,6 +49,19 @@
     font-family: 'Inter', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    overscroll-behavior-y: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Disable text selection everywhere except inputs */
+  body {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  input, textarea, [contenteditable] {
+    -webkit-user-select: text;
+    user-select: text;
   }
 
   a {
@@ -168,5 +182,14 @@
   /* Smooth transitions on interactive elements */
   button {
     -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Safe area utilities for iPhone notch / home indicator */
+  .safe-bottom {
+    padding-bottom: max(env(safe-area-inset-bottom, 0px), 0.75rem);
+  }
+
+  .safe-top {
+    padding-top: env(safe-area-inset-top, 0px);
   }
 }

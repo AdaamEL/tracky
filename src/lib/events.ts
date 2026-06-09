@@ -10,7 +10,7 @@ export type TrackyEvent = {
   notification_offset_minutes?: number | null
 }
 
-function buildDateTimeIso(date: string, time: string) {
+export function buildDateTimeIso(date: string, time: string) {
   return new Date(`${date}T${time || '12:00'}:00`).toISOString()
 }
 
@@ -94,4 +94,42 @@ export async function deleteEvent(id: string) {
   const { error } = await supabase.from('events').delete().eq('id', id)
   if (error) throw error
   return true
+}
+
+export async function searchEvents(userId: string, query: string): Promise<TrackyEvent[]> {
+  if (!query.trim()) return []
+  const { data, error } = await supabase
+    .from('events')
+    .select('*')
+    .eq('user_id', userId)
+    .ilike('title', `%${query.trim()}%`)
+    .order('start_date', { ascending: true })
+    .limit(50)
+  if (error) throw error
+  return (data ?? []) as TrackyEvent[]
+}
+
+export async function getConflictingEvents(
+  userId: string,
+  dateKey: string,
+  time: string,
+  excludeEventId?: string | null,
+): Promise<TrackyEvent[]> {
+  const timestamp = buildDateTimeIso(dateKey, time)
+  const halfWindowMs = 30 * 60 * 1000
+  const windowStart = new Date(new Date(timestamp).getTime() - halfWindowMs).toISOString()
+  const windowEnd = new Date(new Date(timestamp).getTime() + halfWindowMs).toISOString()
+
+  let query = supabase
+    .from('events')
+    .select('*')
+    .eq('user_id', userId)
+    .gte('start_date', windowStart)
+    .lte('start_date', windowEnd)
+
+  if (excludeEventId) query = query.neq('id', excludeEventId)
+
+  const { data, error } = await query
+  if (error) throw error
+  return (data ?? []) as TrackyEvent[]
 }
