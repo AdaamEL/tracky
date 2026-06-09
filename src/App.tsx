@@ -10,6 +10,7 @@ import {
   LogOut,
   Pencil,
   Plus,
+  RefreshCw,
   Search,
   Sparkles,
   Trash2,
@@ -22,7 +23,7 @@ import { Calendar } from '@/components/ui/calendar'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Drawer, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Input } from '@/components/ui/input'
-import { createEvent, deleteEvent, fetchEventsByDate, getConflictingEvents, searchEvents, type TrackyEvent, updateEvent } from '@/lib/events'
+import { createEvent, deleteEvent, deleteEventGroup, fetchEventsByDate, getConflictingEvents, searchEvents, type Recurrence, type TrackyEvent, updateEvent } from '@/lib/events'
 import { supabase } from '@/lib/supabase'
 
 type Profile = {
@@ -96,6 +97,13 @@ function App() {
 
   // Conflict detection
   const [conflictingEvents, setConflictingEvents] = useState<TrackyEvent[]>([])
+
+  // Event form extras
+  const [eventIsAllDay, setEventIsAllDay] = useState(false)
+  const [eventRecurrence, setEventRecurrence] = useState<Recurrence>('none')
+
+  // Delete confirmation for recurring events
+  const [deleteConfirmEvent, setDeleteConfirmEvent] = useState<TrackyEvent | null>(null)
 
   const today = new Date()
   const todayKey = dateKeyFromDate(today)
@@ -262,6 +270,9 @@ function App() {
     setEventTitle('')
     setEventTime('12:00')
     setEventNotifOffset(15)
+    setEventIsAllDay(false)
+    setEventRecurrence('none')
+    setConflictingEvents([])
     setEventDialogOpen(true)
   }
 
@@ -271,6 +282,9 @@ function App() {
     setEventTitle(event.title)
     setEventTime(formatEventTime(event.created_at))
     setEventNotifOffset(event.notification_offset_minutes ?? 15)
+    setEventIsAllDay(event.is_all_day ?? false)
+    setEventRecurrence(event.recurrence ?? 'none')
+    setConflictingEvents([])
     setEventDialogOpen(true)
   }
 
@@ -503,8 +517,14 @@ function App() {
                           <div className="min-w-0 space-y-1.5">
                             <div className="flex flex-wrap items-center gap-2">
                               <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-[0.7rem] font-semibold text-emerald-700 ring-1 ring-emerald-200/60">
-                                {formatEventTime(ev.created_at)}
+                                {ev.is_all_day ? 'Toute la journée' : formatEventTime(ev.created_at)}
                               </span>
+                              {ev.recurrence_group_id ? (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-2 py-0.5 text-[0.66rem] font-medium text-stone-500">
+                                  <RefreshCw className="size-2.5" />
+                                  {ev.recurrence === 'weekly' ? 'Hebdo' : 'Mensuel'}
+                                </span>
+                              ) : null}
                               <span className="text-[0.66rem] font-medium uppercase tracking-[0.2em] text-stone-400">
                                 {dateKeyFromDate(new Date(ev.created_at ?? today.toISOString())) === todayKey ? 'Aujourd\'hui' : 'Planifié'}
                               </span>
@@ -527,9 +547,12 @@ function App() {
                               variant="ghost"
                               size="icon"
                               className="cursor-pointer size-8 rounded-full text-stone-400 transition-colors hover:bg-rose-50 hover:text-rose-500"
-                              onClick={async () => {
-                                await deleteEvent(ev.id)
-                                await refetchVisibleEvents()
+                              onClick={() => {
+                                if (ev.recurrence_group_id) {
+                                  setDeleteConfirmEvent(ev)
+                                } else {
+                                  deleteEvent(ev.id).then(refetchVisibleEvents)
+                                }
                               }}
                               aria-label="Supprimer l'événement"
                             >
@@ -723,6 +746,14 @@ function App() {
           </DialogHeader>
 
           <div className="space-y-3 py-1">
+            {/* Recurring badge (edit mode only) */}
+            {editingEventId && eventRecurrence !== 'none' ? (
+              <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+                <RefreshCw className="size-3.5 shrink-0" />
+                Événement récurrent · {eventRecurrence === 'weekly' ? 'Chaque semaine' : 'Chaque mois'}
+              </div>
+            ) : null}
+
             <label className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Titre</label>
             <Input
               value={eventTitle}
@@ -730,13 +761,58 @@ function App() {
               placeholder="Titre de l'événement"
               className="h-11 rounded-2xl border-stone-200 bg-stone-50 text-stone-900 placeholder:text-stone-300 focus-visible:border-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-200/50"
             />
-            <label className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Heure</label>
-            <Input
-              value={eventTime}
-              onChange={(e) => setEventTime(e.target.value)}
-              type="time"
-              className="h-11 w-full rounded-2xl border-stone-200 bg-stone-50 text-stone-900 focus-visible:border-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-200/50"
-            />
+
+            {/* All-day toggle */}
+            <div className="flex items-center justify-between rounded-2xl border border-stone-200 bg-stone-50 px-4 py-2.5">
+              <span className="text-sm font-medium text-stone-700">Journée entière</span>
+              <button
+                type="button"
+                onClick={() => setEventIsAllDay(v => !v)}
+                className={`relative inline-flex h-6 w-11 cursor-pointer items-center rounded-full transition-colors duration-200 focus:outline-none ${eventIsAllDay ? 'bg-emerald-500' : 'bg-stone-200'}`}
+              >
+                <span className={`inline-block size-4 rounded-full bg-white shadow transition-transform duration-200 ${eventIsAllDay ? 'translate-x-6' : 'translate-x-1'}`} />
+              </button>
+            </div>
+
+            {!eventIsAllDay ? (
+              <>
+                <label className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Heure</label>
+                <Input
+                  value={eventTime}
+                  onChange={(e) => setEventTime(e.target.value)}
+                  type="time"
+                  className="h-11 w-full rounded-2xl border-stone-200 bg-stone-50 text-stone-900 focus-visible:border-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-200/50"
+                />
+              </>
+            ) : null}
+
+            {/* Recurrence (create mode only) */}
+            {!editingEventId ? (
+              <>
+                <label className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Récurrence</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {([
+                    { value: 'none', label: 'Aucune' },
+                    { value: 'weekly', label: 'Chaque semaine' },
+                    { value: 'monthly', label: 'Chaque mois' },
+                  ] as const).map(({ value, label }) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setEventRecurrence(value)}
+                      className={`cursor-pointer rounded-xl border py-2.5 text-xs font-medium transition-all duration-150 ${
+                        eventRecurrence === value
+                          ? 'border-emerald-300 bg-emerald-50 text-emerald-700 shadow-sm'
+                          : 'border-stone-200 bg-stone-50 text-stone-500 hover:border-stone-300 hover:bg-stone-100 hover:text-stone-700'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : null}
+
             {conflictingEvents.length > 0 ? (
               <div className="flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 px-3.5 py-3">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
@@ -779,22 +855,61 @@ function App() {
                 if (!sessionUser || !targetDateKey) return
 
                 if (editingEventId) {
-                  await updateEvent(editingEventId, eventTitle || 'Nouvel événement', targetDateKey, eventTime, eventNotifOffset)
+                  await updateEvent(editingEventId, eventTitle || 'Nouvel événement', targetDateKey, eventTime, eventNotifOffset, eventIsAllDay)
                 } else {
-                  await createEvent(sessionUser.id, eventTitle || 'Nouvel événement', targetDateKey, eventTime, eventNotifOffset)
+                  await createEvent(sessionUser.id, eventTitle || 'Nouvel événement', targetDateKey, eventTime, eventNotifOffset, eventIsAllDay, eventRecurrence)
                 }
 
                 await refetchVisibleEvents()
                 setEventTitle('')
                 setEventTime('12:00')
                 setEventNotifOffset(15)
+                setEventIsAllDay(false)
+                setEventRecurrence('none')
                 setEditingEventId(null)
                 setEditingEventDateKey(null)
+                setConflictingEvents([])
                 setEventDialogOpen(false)
               }}
               className="cursor-pointer bg-emerald-600 text-white hover:bg-emerald-700"
             >
               {editingEventId ? 'Enregistrer' : 'Créer'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* ── Delete confirmation for recurring events ── */}
+      <Dialog open={Boolean(deleteConfirmEvent)} onOpenChange={(open) => { if (!open) setDeleteConfirmEvent(null) }}>
+        <DialogContent className="max-w-sm border-stone-200/80 bg-white text-stone-900 shadow-[0_8px_40px_rgba(44,38,32,0.12)]">
+          <DialogHeader>
+            <DialogTitle className="text-stone-900">Supprimer l'événement récurrent</DialogTitle>
+            <DialogDescription className="text-stone-500">
+              "{deleteConfirmEvent?.title}" fait partie d'une série. Que souhaites-tu supprimer ?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col gap-2 sm:flex-col">
+            <Button
+              variant="outline"
+              className="cursor-pointer w-full border-stone-200 text-stone-700 hover:bg-stone-50"
+              onClick={async () => {
+                if (!deleteConfirmEvent) return
+                await deleteEvent(deleteConfirmEvent.id)
+                setDeleteConfirmEvent(null)
+                await refetchVisibleEvents()
+              }}
+            >
+              Cet événement uniquement
+            </Button>
+            <Button
+              className="cursor-pointer w-full bg-rose-500 text-white hover:bg-rose-600"
+              onClick={async () => {
+                if (!deleteConfirmEvent?.recurrence_group_id) return
+                await deleteEventGroup(deleteConfirmEvent.recurrence_group_id)
+                setDeleteConfirmEvent(null)
+                await refetchVisibleEvents()
+              }}
+            >
+              Toute la série
             </Button>
           </DialogFooter>
         </DialogContent>
