@@ -12,8 +12,12 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
 export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
   if (!('serviceWorker' in navigator)) return null
   try {
-    return await navigator.serviceWorker.register('/sw.js')
-  } catch {
+    await navigator.serviceWorker.register('/sw.js')
+    // Wait for an active SW before returning — pushManager.subscribe() requires it.
+    // navigator.serviceWorker.ready resolves only once a SW is active and controlling the page.
+    return await navigator.serviceWorker.ready
+  } catch (err) {
+    console.error('[Tracky] Service worker registration failed:', err)
     return null
   }
 }
@@ -22,6 +26,10 @@ export async function subscribeToPush(
   registration: ServiceWorkerRegistration,
   vapidPublicKey: string
 ): Promise<PushSubscription | null> {
+  if (!vapidPublicKey) {
+    console.error('[Tracky] VITE_VAPID_PUBLIC_KEY is missing')
+    return null
+  }
   try {
     const existing = await registration.pushManager.getSubscription()
     if (existing) return existing
@@ -29,7 +37,8 @@ export async function subscribeToPush(
       userVisibleOnly: true,
       applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
     })
-  } catch {
+  } catch (err) {
+    console.error('[Tracky] Push subscription failed:', err)
     return null
   }
 }
@@ -43,7 +52,7 @@ export async function saveSubscription(
     endpoint: string
     keys: { p256dh: string; auth: string }
   }
-  await client.from('push_subscriptions').upsert(
+  const { error } = await client.from('push_subscriptions').upsert(
     {
       user_id: userId,
       endpoint: json.endpoint,
@@ -52,4 +61,8 @@ export async function saveSubscription(
     },
     { onConflict: 'user_id,endpoint' }
   )
+  if (error) {
+    console.error('[Tracky] Failed to save push subscription:', error)
+    throw error
+  }
 }
