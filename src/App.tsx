@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { fr } from 'date-fns/locale/fr'
 import {
   AlertTriangle,
@@ -23,7 +23,7 @@ import { Calendar } from '@/components/ui/calendar'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Drawer, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Input } from '@/components/ui/input'
-import { createEvent, deleteEvent, deleteEventGroup, fetchEventsByDate, getConflictingEvents, searchEvents, type Recurrence, type TrackyEvent, updateEvent } from '@/lib/events'
+import { createEvent, deleteEvent, deleteEventGroup, fetchEventsByDate, fetchEventsByMonth, getConflictingEvents, searchEvents, type Recurrence, type TrackyEvent, updateEvent } from '@/lib/events'
 import { supabase } from '@/lib/supabase'
 
 type Profile = {
@@ -88,7 +88,7 @@ function App() {
   const [editingEventId, setEditingEventId] = useState<string | null>(null)
   const [editingEventDateKey, setEditingEventDateKey] = useState<string | null>(null)
   const [activeView, setActiveView] = useState<'calendar' | 'today'>('calendar')
-  const [eventNotifOffset, setEventNotifOffset] = useState(15)
+  const [eventNotifOffset, setEventNotifOffset] = useState<number | null>(15)
 
   // Search
   const [searchQuery, setSearchQuery] = useState('')
@@ -101,6 +101,11 @@ function App() {
   // Event form extras
   const [eventIsAllDay, setEventIsAllDay] = useState(false)
   const [eventRecurrence, setEventRecurrence] = useState<Recurrence>('none')
+  const [eventEndDateKey, setEventEndDateKey] = useState('')
+
+  // Calendar month events (for dots)
+  const [calendarMonth, setCalendarMonth] = useState(new Date())
+  const [monthEvents, setMonthEvents] = useState<Pick<TrackyEvent, 'id' | 'start_date' | 'end_date'>[]>([])
 
   // Delete confirmation for recurring events
   const [deleteConfirmEvent, setDeleteConfirmEvent] = useState<TrackyEvent | null>(null)
@@ -114,6 +119,23 @@ function App() {
   const hasSession = Boolean(sessionUser)
   const surfaceTitle = activeView === 'today' ? 'Aujourd\'hui' : 'Calendrier'
   const surfaceDescription = activeView === 'today' ? 'Vue rapide, optimisée pour le pouce.' : 'Navigation précise, pensée mobile-first.'
+
+  // Calendar dots: expand multi-day events into individual Date objects per day
+  const daysWithEvents = useMemo(() => {
+    const days: Date[] = []
+    for (const ev of monthEvents) {
+      if (!ev.start_date) continue
+      const start = new Date(ev.start_date)
+      const end = ev.end_date ? new Date(ev.end_date) : start
+      const cur = new Date(start.getFullYear(), start.getMonth(), start.getDate())
+      const endDay = new Date(end.getFullYear(), end.getMonth(), end.getDate())
+      while (cur <= endDay) {
+        days.push(new Date(cur))
+        cur.setDate(cur.getDate() + 1)
+      }
+    }
+    return days
+  }, [monthEvents])
 
   useEffect(() => {
     let mounted = true
@@ -183,6 +205,14 @@ function App() {
 
     return () => { supabase.removeChannel(channel) }
   }, [sessionUser, visibleDateKey])
+
+  // Month events for calendar dots
+  useEffect(() => {
+    if (!sessionUser) return
+    fetchEventsByMonth(sessionUser.id, calendarMonth.getFullYear(), calendarMonth.getMonth() + 1)
+      .then(setMonthEvents)
+      .catch(console.error)
+  }, [sessionUser, calendarMonth])
 
   // Search debounce
   useEffect(() => {
@@ -272,18 +302,21 @@ function App() {
     setEventNotifOffset(15)
     setEventIsAllDay(false)
     setEventRecurrence('none')
+    setEventEndDateKey(visibleDateKey ?? '')
     setConflictingEvents([])
     setEventDialogOpen(true)
   }
 
   const openEditDialog = (event: TrackyEvent) => {
     setEditingEventId(event.id)
-    setEditingEventDateKey(event.created_at ? dateKeyFromDate(new Date(event.created_at)) : visibleDateKey)
+    const startKey = event.start_date ? dateKeyFromDate(new Date(event.start_date)) : visibleDateKey
+    setEditingEventDateKey(startKey)
     setEventTitle(event.title)
-    setEventTime(formatEventTime(event.created_at))
-    setEventNotifOffset(event.notification_offset_minutes ?? 15)
+    setEventTime(formatEventTime(event.start_date))
+    setEventNotifOffset(event.notification_offset_minutes ?? null)
     setEventIsAllDay(event.is_all_day ?? false)
     setEventRecurrence(event.recurrence ?? 'none')
+    setEventEndDateKey(event.end_date ? dateKeyFromDate(new Date(event.end_date)) : (startKey ?? ''))
     setConflictingEvents([])
     setEventDialogOpen(true)
   }
@@ -292,6 +325,9 @@ function App() {
     if (!sessionUser || !visibleDateKey) return
     const list = await fetchEventsByDate(sessionUser.id, visibleDateKey)
     setEvents(list)
+    fetchEventsByMonth(sessionUser.id, calendarMonth.getFullYear(), calendarMonth.getMonth() + 1)
+      .then(setMonthEvents)
+      .catch(console.error)
   }
 
   const eventLabel = activeView === 'today' ? 'Événements d\'aujourd\'hui' : 'Événements du jour'
@@ -399,7 +435,10 @@ function App() {
                     mode="single"
                     selected={selectedDate}
                     onSelect={(date: Date | undefined) => setSelectedDate(date)}
+                    onMonthChange={setCalendarMonth}
                     locale={fr}
+                    modifiers={{ hasEvent: daysWithEvents }}
+                    modifiersClassNames={{ hasEvent: 'day-has-event' }}
                     className="w-full rounded-[1.4rem] p-3 shadow-none"
                   />
                 ) : (
@@ -530,7 +569,13 @@ function App() {
                               </span>
                             </div>
                             <div className="truncate text-sm font-semibold text-stone-800">{ev.title}</div>
-                            <div className="text-xs text-stone-400">Synchronisé en temps réel</div>
+                            {ev.start_date && ev.end_date && dateKeyFromDate(new Date(ev.start_date)) !== dateKeyFromDate(new Date(ev.end_date)) ? (
+                              <div className="text-xs font-medium text-emerald-600">
+                                Du {new Date(ev.start_date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} au {new Date(ev.end_date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
+                              </div>
+                            ) : (
+                              <div className="text-xs text-stone-400">Synchronisé en temps réel</div>
+                            )}
                           </div>
 
                           <div className="flex shrink-0 items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
@@ -786,6 +831,16 @@ function App() {
               </>
             ) : null}
 
+            {/* End date */}
+            <label className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Date de fin</label>
+            <Input
+              type="date"
+              value={eventEndDateKey}
+              onChange={(e) => setEventEndDateKey(e.target.value)}
+              min={editingEventId ? undefined : (visibleDateKey ?? undefined)}
+              className="h-11 w-full rounded-2xl border-stone-200 bg-stone-50 text-stone-900 focus-visible:border-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-200/50"
+            />
+
             {/* Recurrence (create mode only) */}
             {!editingEventId ? (
               <>
@@ -823,19 +878,19 @@ function App() {
               </div>
             ) : null}
             <label className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Rappel</label>
-            <div className="grid grid-cols-4 gap-2">
-              {([5, 15, 30, 60] as const).map((min) => (
+            <div className="flex flex-wrap gap-2">
+              {([null, 5, 15, 30, 60] as Array<number | null>).map((min) => (
                 <button
-                  key={min}
+                  key={min ?? 'none'}
                   type="button"
                   onClick={() => setEventNotifOffset(min)}
-                  className={`cursor-pointer rounded-xl border py-2.5 text-xs font-medium transition-all duration-150 ${
+                  className={`cursor-pointer rounded-xl border px-3 py-2.5 text-xs font-medium transition-all duration-150 ${
                     eventNotifOffset === min
                       ? 'border-emerald-300 bg-emerald-50 text-emerald-700 shadow-sm'
                       : 'border-stone-200 bg-stone-50 text-stone-500 hover:border-stone-300 hover:bg-stone-100 hover:text-stone-700'
                   }`}
                 >
-                  {min < 60 ? `${min} min` : '1 h'}
+                  {min === null ? 'Aucun' : min < 60 ? `${min} min` : '1 h'}
                 </button>
               ))}
             </div>
@@ -854,10 +909,12 @@ function App() {
                 const targetDateKey = editingEventId ? editingEventDateKey ?? visibleDateKey : visibleDateKey
                 if (!sessionUser || !targetDateKey) return
 
+                const endKey = eventEndDateKey || targetDateKey
+
                 if (editingEventId) {
-                  await updateEvent(editingEventId, eventTitle || 'Nouvel événement', targetDateKey, eventTime, eventNotifOffset, eventIsAllDay)
+                  await updateEvent(editingEventId, eventTitle || 'Nouvel événement', targetDateKey, eventTime, eventNotifOffset, eventIsAllDay, endKey)
                 } else {
-                  await createEvent(sessionUser.id, eventTitle || 'Nouvel événement', targetDateKey, eventTime, eventNotifOffset, eventIsAllDay, eventRecurrence)
+                  await createEvent(sessionUser.id, eventTitle || 'Nouvel événement', targetDateKey, eventTime, eventNotifOffset, eventIsAllDay, eventRecurrence, endKey)
                 }
 
                 await refetchVisibleEvents()
@@ -866,6 +923,7 @@ function App() {
                 setEventNotifOffset(15)
                 setEventIsAllDay(false)
                 setEventRecurrence('none')
+                setEventEndDateKey('')
                 setEditingEventId(null)
                 setEditingEventDateKey(null)
                 setConflictingEvents([])

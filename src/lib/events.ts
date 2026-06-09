@@ -31,57 +31,64 @@ function endOfDayIso(date: string) {
   return new Date(`${date}T23:59:59.999`).toISOString()
 }
 
-function generateOccurrenceDates(startDate: string, recurrence: 'weekly' | 'monthly'): string[] {
-  const count = recurrence === 'weekly' ? 52 : 12
-  const dates: string[] = [startDate]
-  const base = new Date(`${startDate}T12:00:00`)
-
-  for (let i = 1; i < count; i++) {
-    const next = new Date(base)
-    if (recurrence === 'weekly') {
-      next.setDate(base.getDate() + 7 * i)
-    } else {
-      next.setMonth(base.getMonth() + i)
-    }
-    dates.push(localDateKey(next))
-  }
-  return dates
-}
-
+// Returns all events whose date range overlaps with the given day
 export async function fetchEventsByDate(userId: string, date: string) {
   const { data, error } = await supabase
     .from('events')
     .select('*')
     .eq('user_id', userId)
-    .gte('created_at', startOfDayIso(date))
-    .lte('created_at', endOfDayIso(date))
-    .order('created_at', { ascending: true })
+    .lte('start_date', endOfDayIso(date))
+    .gte('end_date', startOfDayIso(date))
+    .order('start_date', { ascending: true })
 
   if (error) throw error
   return (data ?? []) as TrackyEvent[]
 }
 
+// Returns minimal event data for all events overlapping a given month (for calendar dots)
+export async function fetchEventsByMonth(
+  userId: string,
+  year: number,
+  month: number,
+): Promise<Pick<TrackyEvent, 'id' | 'start_date' | 'end_date'>[]> {
+  const monthStart = new Date(year, month - 1, 1).toISOString()
+  const monthEnd = new Date(year, month, 0, 23, 59, 59, 999).toISOString()
+
+  const { data, error } = await supabase
+    .from('events')
+    .select('id, start_date, end_date')
+    .eq('user_id', userId)
+    .lte('start_date', monthEnd)
+    .gte('end_date', monthStart)
+
+  if (error) throw error
+  return (data ?? []) as Pick<TrackyEvent, 'id' | 'start_date' | 'end_date'>[]
+}
+
 export async function createEvent(
   userId: string,
   title: string,
-  date: string,
+  startDate: string,
   time = '12:00',
-  offsetMinutes = 15,
+  offsetMinutes: number | null = 15,
   isAllDay = false,
   recurrence: Recurrence = 'none',
+  endDate?: string,
 ) {
   const eventTime = isAllDay ? '12:00' : time
+  const effectiveEndDate = endDate ?? startDate
 
   if (recurrence === 'none') {
-    const timestamp = buildDateTimeIso(date, eventTime)
+    const startTs = buildDateTimeIso(startDate, eventTime)
+    const endTs = buildDateTimeIso(effectiveEndDate, eventTime)
     const { data, error } = await supabase
       .from('events')
       .insert([{
         user_id: userId,
         title,
-        start_date: timestamp,
-        end_date: timestamp,
-        created_at: timestamp,
+        start_date: startTs,
+        end_date: endTs,
+        created_at: startTs,
         notification_offset_minutes: offsetMinutes,
         is_all_day: isAllDay,
         recurrence: 'none',
@@ -94,21 +101,33 @@ export async function createEvent(
   }
 
   const groupId = crypto.randomUUID()
-  const dates = generateOccurrenceDates(date, recurrence)
-  const rows = dates.map(d => {
-    const ts = buildDateTimeIso(d, eventTime)
-    return {
+  const startBase = new Date(`${startDate}T12:00:00`)
+  const endBase = new Date(`${effectiveEndDate}T12:00:00`)
+  const durationDays = Math.round((endBase.getTime() - startBase.getTime()) / (1000 * 60 * 60 * 24))
+  const count = recurrence === 'weekly' ? 52 : 12
+
+  const rows = []
+  for (let i = 0; i < count; i++) {
+    const nextStart = new Date(startBase)
+    if (recurrence === 'weekly') nextStart.setDate(startBase.getDate() + 7 * i)
+    else nextStart.setMonth(startBase.getMonth() + i)
+    const nextEnd = new Date(nextStart)
+    nextEnd.setDate(nextStart.getDate() + durationDays)
+
+    const startTs = buildDateTimeIso(localDateKey(nextStart), eventTime)
+    const endTs = buildDateTimeIso(localDateKey(nextEnd), eventTime)
+    rows.push({
       user_id: userId,
       title,
-      start_date: ts,
-      end_date: ts,
-      created_at: ts,
+      start_date: startTs,
+      end_date: endTs,
+      created_at: startTs,
       notification_offset_minutes: offsetMinutes,
       is_all_day: isAllDay,
       recurrence,
       recurrence_group_id: groupId,
-    }
-  })
+    })
+  }
 
   const { data, error } = await supabase.from('events').insert(rows).select()
   if (error) throw error
@@ -118,21 +137,24 @@ export async function createEvent(
 export async function updateEvent(
   id: string,
   title: string,
-  date: string,
+  startDate: string,
   time = '12:00',
-  offsetMinutes = 15,
+  offsetMinutes: number | null = 15,
   isAllDay = false,
+  endDate?: string,
 ) {
   const eventTime = isAllDay ? '12:00' : time
-  const timestamp = buildDateTimeIso(date, eventTime)
+  const effectiveEndDate = endDate ?? startDate
+  const startTs = buildDateTimeIso(startDate, eventTime)
+  const endTs = buildDateTimeIso(effectiveEndDate, eventTime)
 
   const { data, error } = await supabase
     .from('events')
     .update({
       title,
-      start_date: timestamp,
-      end_date: timestamp,
-      created_at: timestamp,
+      start_date: startTs,
+      end_date: endTs,
+      created_at: startTs,
       notification_offset_minutes: offsetMinutes,
       is_all_day: isAllDay,
       notified_at: null,
