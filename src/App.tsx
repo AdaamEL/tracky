@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowRight,
   CalendarDays,
+  Car,
   Clock3,
   Loader2,
   LockKeyhole,
@@ -102,6 +103,8 @@ function App() {
   const [eventIsAllDay, setEventIsAllDay] = useState(false)
   const [eventRecurrence, setEventRecurrence] = useState<Recurrence>('none')
   const [eventEndDateKey, setEventEndDateKey] = useState('')
+  const [eventStartDateKey, setEventStartDateKey] = useState('')
+  const [eventTab, setEventTab] = useState<'single' | 'recurring' | 'period'>('single')
 
   // Calendar month events (for dots)
   const [calendarMonth, setCalendarMonth] = useState(new Date())
@@ -237,7 +240,7 @@ function App() {
 
   // Conflict detection
   useEffect(() => {
-    if (!sessionUser || !eventDialogOpen || !visibleDateKey || !eventTime) {
+    if (!sessionUser || !eventDialogOpen || !visibleDateKey || !eventTime || eventTab === 'period' || eventIsAllDay) {
       setConflictingEvents([])
       return
     }
@@ -250,7 +253,7 @@ function App() {
       }
     }, 300)
     return () => clearTimeout(timer)
-  }, [sessionUser, eventDialogOpen, visibleDateKey, eventTime, editingEventId])
+  }, [sessionUser, eventDialogOpen, visibleDateKey, eventTime, editingEventId, eventTab, eventIsAllDay])
 
   const openProfile = (profile: Profile) => {
     setActiveProfile(profile)
@@ -302,7 +305,9 @@ function App() {
     setEventNotifOffset(15)
     setEventIsAllDay(false)
     setEventRecurrence('none')
+    setEventStartDateKey(visibleDateKey ?? '')
     setEventEndDateKey(visibleDateKey ?? '')
+    setEventTab('single')
     setConflictingEvents([])
     setEventDialogOpen(true)
   }
@@ -310,15 +315,48 @@ function App() {
   const openEditDialog = (event: TrackyEvent) => {
     setEditingEventId(event.id)
     const startKey = event.start_date ? dateKeyFromDate(new Date(event.start_date)) : visibleDateKey
+    const endKey = event.end_date ? dateKeyFromDate(new Date(event.end_date)) : (startKey ?? '')
     setEditingEventDateKey(startKey)
     setEventTitle(event.title)
     setEventTime(formatEventTime(event.start_date))
     setEventNotifOffset(event.notification_offset_minutes ?? null)
     setEventIsAllDay(event.is_all_day ?? false)
     setEventRecurrence(event.recurrence ?? 'none')
-    setEventEndDateKey(event.end_date ? dateKeyFromDate(new Date(event.end_date)) : (startKey ?? ''))
+    setEventStartDateKey(startKey ?? '')
+    setEventEndDateKey(endKey)
+
+    if (event.recurrence && event.recurrence !== 'none') {
+      setEventTab('recurring')
+    } else if (startKey && endKey && startKey !== endKey) {
+      setEventTab('period')
+    } else {
+      setEventTab('single')
+    }
+
     setConflictingEvents([])
     setEventDialogOpen(true)
+  }
+
+  const switchEventTab = (tab: 'single' | 'recurring' | 'period') => {
+    setEventTab(tab)
+    if (tab === 'single') {
+      setEventRecurrence('none')
+      setEventIsAllDay(false)
+      setEventEndDateKey(eventStartDateKey || visibleDateKey || '')
+    } else if (tab === 'recurring') {
+      setEventRecurrence((prev) => (prev === 'none' ? 'weekly' : prev))
+      setEventIsAllDay(false)
+      setEventEndDateKey(eventStartDateKey || visibleDateKey || '')
+    } else {
+      setEventRecurrence('none')
+      setEventIsAllDay(true)
+      const base = eventStartDateKey || visibleDateKey
+      if (base && (!eventEndDateKey || eventEndDateKey <= base)) {
+        const next = new Date(`${base}T12:00:00`)
+        next.setDate(next.getDate() + 1)
+        setEventEndDateKey(dateKeyFromDate(next))
+      }
+    }
   }
 
   const refetchVisibleEvents = async () => {
@@ -786,97 +824,155 @@ function App() {
               {editingEventId ? 'Modifier l\'événement' : 'Nouvel événement'}
             </DialogTitle>
             <DialogDescription className="text-stone-500">
-              Ajoute un titre et une heure pour garder la vue claire sur mobile.
+              {eventTab === 'recurring'
+                ? 'Se répète automatiquement chaque semaine ou chaque mois.'
+                : eventTab === 'period'
+                  ? 'Pour suivre une période de location ou d\'indisponibilité.'
+                  : 'Un événement simple, à une date précise.'}
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-3 py-1">
-            {/* Recurring badge (edit mode only) */}
-            {editingEventId && eventRecurrence !== 'none' ? (
-              <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
-                <RefreshCw className="size-3.5 shrink-0" />
-                Événement récurrent · {eventRecurrence === 'weekly' ? 'Chaque semaine' : 'Chaque mois'}
+            {/* Tab selector (create mode) / type indicator (edit mode) */}
+            {!editingEventId ? (
+              <div className="grid grid-cols-3 gap-1.5 rounded-2xl border border-stone-200 bg-stone-50 p-1">
+                {([
+                  { id: 'single', label: 'Ponctuel', icon: CalendarDays },
+                  { id: 'recurring', label: 'Récurrent', icon: RefreshCw },
+                  { id: 'period', label: 'Période', icon: Car },
+                ] as const).map(({ id, label, icon: Icon }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => switchEventTab(id)}
+                    className={`flex cursor-pointer flex-col items-center gap-1 rounded-xl py-2 text-[0.7rem] font-medium transition-all duration-150 ${
+                      eventTab === id
+                        ? 'bg-white text-emerald-700 shadow-sm'
+                        : 'text-stone-500 hover:text-stone-700'
+                    }`}
+                  >
+                    <Icon className="size-4" />
+                    {label}
+                  </button>
+                ))}
               </div>
-            ) : null}
+            ) : (
+              <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+                {eventTab === 'recurring' ? (
+                  <RefreshCw className="size-3.5 shrink-0" />
+                ) : eventTab === 'period' ? (
+                  <Car className="size-3.5 shrink-0" />
+                ) : (
+                  <CalendarDays className="size-3.5 shrink-0" />
+                )}
+                {eventTab === 'recurring'
+                  ? `Événement récurrent · ${eventRecurrence === 'weekly' ? 'Chaque semaine' : 'Chaque mois'}`
+                  : eventTab === 'period'
+                    ? 'Événement sur une période'
+                    : 'Événement ponctuel'}
+              </div>
+            )}
 
-            <label className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Titre</label>
+            <label className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">
+              {eventTab === 'period' ? 'Véhicule / Client' : 'Titre'}
+            </label>
             <Input
               value={eventTitle}
               onChange={(e) => setEventTitle(e.target.value)}
-              placeholder="Titre de l'événement"
+              placeholder={eventTab === 'period' ? 'Ex : Clio 5 - Jean Dupont' : 'Titre de l\'événement'}
               className="h-11 rounded-2xl border-stone-200 bg-stone-50 text-stone-900 placeholder:text-stone-300 focus-visible:border-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-200/50"
             />
 
-            {/* All-day toggle */}
-            <div className="flex items-center justify-between rounded-2xl border border-stone-200 bg-stone-50 px-4 py-2.5">
-              <span className="text-sm font-medium text-stone-700">Journée entière</span>
-              <button
-                type="button"
-                onClick={() => setEventIsAllDay(v => !v)}
-                className={`relative inline-flex h-6 w-11 cursor-pointer items-center rounded-full transition-colors duration-200 focus:outline-none ${eventIsAllDay ? 'bg-emerald-500' : 'bg-stone-200'}`}
-              >
-                <span className={`inline-block size-4 rounded-full bg-white shadow transition-transform duration-200 ${eventIsAllDay ? 'translate-x-6' : 'translate-x-1'}`} />
-              </button>
-            </div>
-
-            {!eventIsAllDay ? (
-              <>
-                <label className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Heure</label>
-                <Input
-                  value={eventTime}
-                  onChange={(e) => setEventTime(e.target.value)}
-                  type="time"
-                  className="h-11 w-full rounded-2xl border-stone-200 bg-stone-50 text-stone-900 focus-visible:border-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-200/50"
-                />
-              </>
-            ) : null}
-
-            {/* End date */}
-            <label className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Date de fin</label>
-            <Input
-              type="date"
-              value={eventEndDateKey}
-              onChange={(e) => setEventEndDateKey(e.target.value)}
-              min={editingEventId ? undefined : (visibleDateKey ?? undefined)}
-              className="h-11 w-full rounded-2xl border-stone-200 bg-stone-50 text-stone-900 focus-visible:border-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-200/50"
-            />
-
-            {/* Recurrence (create mode only) */}
-            {!editingEventId ? (
-              <>
-                <label className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Récurrence</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {([
-                    { value: 'none', label: 'Aucune' },
-                    { value: 'weekly', label: 'Chaque semaine' },
-                    { value: 'monthly', label: 'Chaque mois' },
-                  ] as const).map(({ value, label }) => (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => setEventRecurrence(value)}
-                      className={`cursor-pointer rounded-xl border py-2.5 text-xs font-medium transition-all duration-150 ${
-                        eventRecurrence === value
-                          ? 'border-emerald-300 bg-emerald-50 text-emerald-700 shadow-sm'
-                          : 'border-stone-200 bg-stone-50 text-stone-500 hover:border-stone-300 hover:bg-stone-100 hover:text-stone-700'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
+            {eventTab === 'period' ? (
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Du</label>
+                  <Input
+                    type="date"
+                    value={eventStartDateKey}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      setEventStartDateKey(value)
+                      if (eventEndDateKey && eventEndDateKey < value) setEventEndDateKey(value)
+                    }}
+                    className="h-11 w-full rounded-2xl border-stone-200 bg-stone-50 text-stone-900 focus-visible:border-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-200/50"
+                  />
                 </div>
-              </>
-            ) : null}
-
-            {conflictingEvents.length > 0 ? (
-              <div className="flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 px-3.5 py-3">
-                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
-                <div className="text-xs leading-relaxed text-amber-800">
-                  <span className="font-semibold">Conflit détecté.</span>{' '}
-                  {conflictingEvents.map(e => e.title).join(', ')} est dans la même fenêtre de 30 min.
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Au</label>
+                  <Input
+                    type="date"
+                    value={eventEndDateKey}
+                    onChange={(e) => setEventEndDateKey(e.target.value)}
+                    min={eventStartDateKey || undefined}
+                    className="h-11 w-full rounded-2xl border-stone-200 bg-stone-50 text-stone-900 focus-visible:border-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-200/50"
+                  />
                 </div>
               </div>
-            ) : null}
+            ) : (
+              <>
+                {/* All-day toggle */}
+                <div className="flex items-center justify-between rounded-2xl border border-stone-200 bg-stone-50 px-4 py-2.5">
+                  <span className="text-sm font-medium text-stone-700">Journée entière</span>
+                  <button
+                    type="button"
+                    onClick={() => setEventIsAllDay(v => !v)}
+                    className={`relative inline-flex h-6 w-11 cursor-pointer items-center rounded-full transition-colors duration-200 focus:outline-none ${eventIsAllDay ? 'bg-emerald-500' : 'bg-stone-200'}`}
+                  >
+                    <span className={`inline-block size-4 rounded-full bg-white shadow transition-transform duration-200 ${eventIsAllDay ? 'translate-x-6' : 'translate-x-1'}`} />
+                  </button>
+                </div>
+
+                {!eventIsAllDay ? (
+                  <>
+                    <label className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Heure</label>
+                    <Input
+                      value={eventTime}
+                      onChange={(e) => setEventTime(e.target.value)}
+                      type="time"
+                      className="h-11 w-full rounded-2xl border-stone-200 bg-stone-50 text-stone-900 focus-visible:border-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-200/50"
+                    />
+                  </>
+                ) : null}
+
+                {/* Recurrence type (create mode only) */}
+                {eventTab === 'recurring' && !editingEventId ? (
+                  <>
+                    <label className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Se répète</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {([
+                        { value: 'weekly', label: 'Chaque semaine' },
+                        { value: 'monthly', label: 'Chaque mois' },
+                      ] as const).map(({ value, label }) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setEventRecurrence(value)}
+                          className={`cursor-pointer rounded-xl border py-2.5 text-xs font-medium transition-all duration-150 ${
+                            eventRecurrence === value
+                              ? 'border-emerald-300 bg-emerald-50 text-emerald-700 shadow-sm'
+                              : 'border-stone-200 bg-stone-50 text-stone-500 hover:border-stone-300 hover:bg-stone-100 hover:text-stone-700'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                ) : null}
+
+                {conflictingEvents.length > 0 ? (
+                  <div className="flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 px-3.5 py-3">
+                    <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+                    <div className="text-xs leading-relaxed text-amber-800">
+                      <span className="font-semibold">Conflit détecté.</span>{' '}
+                      {conflictingEvents.map(e => e.title).join(', ')} est dans la même fenêtre de 30 min.
+                    </div>
+                  </div>
+                ) : null}
+              </>
+            )}
+
             <label className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Rappel</label>
             <div className="flex flex-wrap gap-2">
               {([null, 5, 15, 30, 60] as Array<number | null>).map((min) => (
@@ -906,10 +1002,14 @@ function App() {
             </Button>
             <Button
               onClick={async () => {
-                const targetDateKey = editingEventId ? editingEventDateKey ?? visibleDateKey : visibleDateKey
-                if (!sessionUser || !targetDateKey) return
+                if (!sessionUser) return
 
-                const endKey = eventEndDateKey || targetDateKey
+                const targetDateKey = eventTab === 'period'
+                  ? (eventStartDateKey || visibleDateKey)
+                  : (editingEventId ? editingEventDateKey ?? visibleDateKey : visibleDateKey)
+                if (!targetDateKey) return
+
+                const endKey = eventTab === 'period' ? (eventEndDateKey || targetDateKey) : targetDateKey
 
                 if (editingEventId) {
                   await updateEvent(editingEventId, eventTitle || 'Nouvel événement', targetDateKey, eventTime, eventNotifOffset, eventIsAllDay, endKey)
@@ -923,7 +1023,9 @@ function App() {
                 setEventNotifOffset(15)
                 setEventIsAllDay(false)
                 setEventRecurrence('none')
+                setEventStartDateKey('')
                 setEventEndDateKey('')
+                setEventTab('single')
                 setEditingEventId(null)
                 setEditingEventDateKey(null)
                 setConflictingEvents([])
