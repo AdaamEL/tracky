@@ -96,7 +96,7 @@ function Calendar({
           defaultClassNames.week_number
         ),
         day: cn(
-          "group/day relative h-9 w-9 rounded-lg p-0 text-center select-none",
+          "group/day relative h-11 w-9 rounded-lg p-0 text-center select-none",
           props.showWeekNumber
             ? "[&:nth-child(2)[data-selected=true]_button]:rounded-l-lg"
             : "[&:first-child[data-selected=true]_button]:rounded-l-lg",
@@ -178,6 +178,7 @@ function CalendarDayButton({
   day,
   modifiers,
   locale,
+  children,
   ...props
 }: React.ComponentProps<typeof DayButton> & { locale?: Partial<Locale> }) {
   const defaultClassNames = getDefaultClassNames()
@@ -187,28 +188,55 @@ function CalendarDayButton({
     if (modifiers.focused) ref.current?.focus()
   }, [modifiers.focused])
 
+  const isSelectedSingle =
+    modifiers.selected &&
+    !modifiers.range_start &&
+    !modifiers.range_end &&
+    !modifiers.range_middle
+
+  const isHighlighted = Boolean(
+    isSelectedSingle || modifiers.range_start || modifiers.range_end || modifiers.range_middle
+  )
+
+  const evtSingle = Boolean((modifiers as Record<string, boolean>).evtSingle)
+  const evtRecurring = Boolean((modifiers as Record<string, boolean>).evtRecurring)
+  const evtPeriod = Boolean((modifiers as Record<string, boolean>).evtPeriod)
+  const hasEvents = evtSingle || evtRecurring || evtPeriod
+
   return (
     <Button
       ref={ref}
       variant="ghost"
       size="icon"
       data-day={day.date.toLocaleDateString(locale?.code)}
-      data-selected-single={
-        modifiers.selected &&
-        !modifiers.range_start &&
-        !modifiers.range_end &&
-        !modifiers.range_middle
-      }
+      data-selected-single={isSelectedSingle}
       data-range-start={modifiers.range_start}
       data-range-end={modifiers.range_end}
       data-range-middle={modifiers.range_middle}
       className={cn(
-        "relative isolate z-10 flex h-9 w-9 flex-col gap-1 border-0 leading-none font-normal group-data-[focused=true]/day:relative group-data-[focused=true]/day:z-10 group-data-[focused=true]/day:border-ring group-data-[focused=true]/day:ring-[3px] group-data-[focused=true]/day:ring-ring/50 data-[range-end=true]:rounded-r-lg data-[range-end=true]:bg-primary data-[range-end=true]:text-primary-foreground data-[range-middle=true]:rounded-none data-[range-middle=true]:bg-muted data-[range-middle=true]:text-foreground data-[range-start=true]:rounded-l-lg data-[range-start=true]:bg-primary data-[range-start=true]:text-primary-foreground data-[selected-single=true]:bg-primary data-[selected-single=true]:text-primary-foreground dark:hover:text-foreground [&>span]:text-xs [&>span]:opacity-70",
+        "relative isolate z-10 flex h-11 w-9 flex-col items-center justify-center gap-1 border-0 leading-none font-normal group-data-[focused=true]/day:relative group-data-[focused=true]/day:z-10 group-data-[focused=true]/day:border-ring group-data-[focused=true]/day:ring-[3px] group-data-[focused=true]/day:ring-ring/50 data-[range-end=true]:rounded-r-lg data-[range-end=true]:bg-primary data-[range-end=true]:text-primary-foreground data-[range-middle=true]:rounded-none data-[range-middle=true]:bg-muted data-[range-middle=true]:text-foreground data-[range-start=true]:rounded-l-lg data-[range-start=true]:bg-primary data-[range-start=true]:text-primary-foreground data-[selected-single=true]:bg-primary data-[selected-single=true]:text-primary-foreground dark:hover:text-foreground [&>span]:text-xs [&>span]:opacity-70",
         defaultClassNames.day,
         className
       )}
       {...props}
-    />
+    >
+      {children}
+      {hasEvents ? (
+        <span className="flex items-center gap-0.5">
+          {evtSingle ? (
+            <span className={cn("size-1.5 rounded-full", isHighlighted ? "bg-white/85" : "bg-emerald-500")} />
+          ) : null}
+          {evtRecurring ? (
+            <span className={cn("size-1.5 rounded-full", isHighlighted ? "bg-white/85" : "bg-sky-500")} />
+          ) : null}
+          {evtPeriod ? (
+            <span className={cn("size-1.5 rounded-full", isHighlighted ? "bg-white/85" : "bg-amber-500")} />
+          ) : null}
+        </span>
+      ) : (
+        <span className="block size-1.5" aria-hidden="true" />
+      )}
+    </Button>
   )
 }
 

@@ -4,7 +4,10 @@ import {
   AlertTriangle,
   ArrowRight,
   CalendarDays,
+  CalendarRange,
   Car,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   Loader2,
   LockKeyhole,
@@ -24,7 +27,7 @@ import { Calendar } from '@/components/ui/calendar'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Drawer, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Input } from '@/components/ui/input'
-import { createEvent, deleteEvent, deleteEventGroup, fetchEventsByDate, fetchEventsByMonth, getConflictingEvents, searchEvents, type Recurrence, type TrackyEvent, updateEvent } from '@/lib/events'
+import { createEvent, deleteEvent, deleteEventGroup, fetchEventsByDate, fetchEventsByMonth, fetchEventsByRange, getConflictingEvents, getEventKind, searchEvents, type Recurrence, type TrackyEvent, updateEvent } from '@/lib/events'
 import { supabase } from '@/lib/supabase'
 
 type Profile = {
@@ -72,6 +75,29 @@ function formatReadableDate(date: Date) {
   })
 }
 
+function startOfWeek(date: Date) {
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+  const diff = (d.getDay() + 6) % 7 // days since Monday
+  d.setDate(d.getDate() - diff)
+  return d
+}
+
+function eventsForDay(list: TrackyEvent[], day: Date) {
+  const dayKey = dateKeyFromDate(day)
+  return list.filter((ev) => {
+    if (!ev.start_date) return false
+    const startKey = dateKeyFromDate(new Date(ev.start_date))
+    const endKey = ev.end_date ? dateKeyFromDate(new Date(ev.end_date)) : startKey
+    return startKey <= dayKey && endKey >= dayKey
+  })
+}
+
+const eventKindDotClass: Record<string, string> = {
+  single: 'bg-emerald-500',
+  recurring: 'bg-sky-500',
+  period: 'bg-amber-500',
+}
+
 function App() {
   const [activeProfile, setActiveProfile] = useState<Profile | null>(null)
   const [pin, setPin] = useState('')
@@ -88,7 +114,7 @@ function App() {
   const [eventTime, setEventTime] = useState('12:00')
   const [editingEventId, setEditingEventId] = useState<string | null>(null)
   const [editingEventDateKey, setEditingEventDateKey] = useState<string | null>(null)
-  const [activeView, setActiveView] = useState<'calendar' | 'today'>('calendar')
+  const [activeView, setActiveView] = useState<'calendar' | 'week' | 'today'>('calendar')
   const [eventNotifOffset, setEventNotifOffset] = useState<number | null>(15)
 
   // Search
@@ -108,7 +134,11 @@ function App() {
 
   // Calendar month events (for dots)
   const [calendarMonth, setCalendarMonth] = useState(new Date())
-  const [monthEvents, setMonthEvents] = useState<Pick<TrackyEvent, 'id' | 'start_date' | 'end_date'>[]>([])
+  const [monthEvents, setMonthEvents] = useState<Pick<TrackyEvent, 'id' | 'start_date' | 'end_date' | 'recurrence'>[]>([])
+
+  // Weekly view
+  const [weekAnchor, setWeekAnchor] = useState(new Date())
+  const [weekEvents, setWeekEvents] = useState<TrackyEvent[]>([])
 
   // Delete confirmation for recurring events
   const [deleteConfirmEvent, setDeleteConfirmEvent] = useState<TrackyEvent | null>(null)
@@ -120,25 +150,49 @@ function App() {
   const selectedLabel = activeProfile ? `${activeProfile.label} · ${activeProfile.tone}` : ''
   const eventCount = events.length
   const hasSession = Boolean(sessionUser)
-  const surfaceTitle = activeView === 'today' ? 'Aujourd\'hui' : 'Calendrier'
-  const surfaceDescription = activeView === 'today' ? 'Vue rapide, optimisée pour le pouce.' : 'Navigation précise, pensée mobile-first.'
+  const surfaceTitle = activeView === 'today' ? 'Aujourd\'hui' : activeView === 'week' ? 'Semaine' : 'Calendrier'
+  const surfaceDescription = activeView === 'today'
+    ? 'Vue rapide, optimisée pour le pouce.'
+    : activeView === 'week'
+      ? 'Vue hebdomadaire avec les titres de tes événements.'
+      : 'Navigation précise, pensée mobile-first.'
 
-  // Calendar dots: expand multi-day events into individual Date objects per day
-  const daysWithEvents = useMemo(() => {
-    const days: Date[] = []
+  // Calendar dots: expand multi-day events into individual Date objects per day, grouped by type
+  const eventDaysByKind = useMemo(() => {
+    const buckets: Record<'single' | 'recurring' | 'period', Date[]> = { single: [], recurring: [], period: [] }
     for (const ev of monthEvents) {
       if (!ev.start_date) continue
+      const kind = getEventKind(ev)
       const start = new Date(ev.start_date)
       const end = ev.end_date ? new Date(ev.end_date) : start
       const cur = new Date(start.getFullYear(), start.getMonth(), start.getDate())
       const endDay = new Date(end.getFullYear(), end.getMonth(), end.getDate())
       while (cur <= endDay) {
-        days.push(new Date(cur))
+        buckets[kind].push(new Date(cur))
         cur.setDate(cur.getDate() + 1)
       }
     }
-    return days
+    return buckets
   }, [monthEvents])
+
+  // 7 days (Mon-Sun) for the weekly view
+  const weekDays = useMemo(() => {
+    const start = startOfWeek(weekAnchor)
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(start)
+      d.setDate(start.getDate() + i)
+      return d
+    })
+  }, [weekAnchor])
+
+  const weekRangeLabel = useMemo(() => {
+    const start = weekDays[0]
+    const end = weekDays[6]
+    const sameMonth = start.getMonth() === end.getMonth()
+    const startStr = start.toLocaleDateString('fr-FR', sameMonth ? { day: 'numeric' } : { day: 'numeric', month: 'short' })
+    const endStr = end.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })
+    return `${startStr} – ${endStr}`
+  }, [weekDays])
 
   useEffect(() => {
     let mounted = true
@@ -216,6 +270,14 @@ function App() {
       .then(setMonthEvents)
       .catch(console.error)
   }, [sessionUser, calendarMonth])
+
+  // Week events for the weekly view
+  useEffect(() => {
+    if (!sessionUser || activeView !== 'week') return
+    fetchEventsByRange(sessionUser.id, dateKeyFromDate(weekDays[0]), dateKeyFromDate(weekDays[6]))
+      .then(setWeekEvents)
+      .catch(console.error)
+  }, [sessionUser, activeView, weekDays])
 
   // Search debounce
   useEffect(() => {
@@ -366,6 +428,17 @@ function App() {
     fetchEventsByMonth(sessionUser.id, calendarMonth.getFullYear(), calendarMonth.getMonth() + 1)
       .then(setMonthEvents)
       .catch(console.error)
+    fetchEventsByRange(sessionUser.id, dateKeyFromDate(weekDays[0]), dateKeyFromDate(weekDays[6]))
+      .then(setWeekEvents)
+      .catch(console.error)
+  }
+
+  const shiftWeek = (delta: number) => {
+    setWeekAnchor((prev) => {
+      const next = new Date(prev)
+      next.setDate(next.getDate() + delta * 7)
+      return next
+    })
   }
 
   const eventLabel = activeView === 'today' ? 'Événements d\'aujourd\'hui' : 'Événements du jour'
@@ -441,44 +514,144 @@ function App() {
             <div className="space-y-4">
 
               {/* View toggle */}
-              <div className="grid grid-cols-2 gap-1.5 rounded-[1.4rem] border border-stone-100 bg-stone-50/60 p-1.5">
+              <div className="grid grid-cols-3 gap-1.5 rounded-[1.4rem] border border-stone-100 bg-stone-50/60 p-1.5">
                 <Button
                   onClick={() => setActiveView('calendar')}
-                  className={`cursor-pointer h-11 rounded-[1rem] text-sm font-medium transition-all duration-200 ${
+                  className={`cursor-pointer h-11 rounded-[1rem] px-1 text-[0.8rem] font-medium transition-all duration-200 ${
                     activeView === 'calendar'
                       ? 'bg-emerald-600 text-white shadow-[0_4px_14px_rgba(77,133,85,0.30)] hover:bg-emerald-700'
                       : 'bg-transparent text-stone-500 shadow-none hover:bg-stone-100 hover:text-stone-700'
                   }`}
                 >
-                  <CalendarDays className="mr-2 size-4" />
-                  Calendrier
+                  <CalendarDays className="mr-1.5 size-4" />
+                  Mois
+                </Button>
+                <Button
+                  onClick={() => setActiveView('week')}
+                  className={`cursor-pointer h-11 rounded-[1rem] px-1 text-[0.8rem] font-medium transition-all duration-200 ${
+                    activeView === 'week'
+                      ? 'bg-emerald-600 text-white shadow-[0_4px_14px_rgba(77,133,85,0.30)] hover:bg-emerald-700'
+                      : 'bg-transparent text-stone-500 shadow-none hover:bg-stone-100 hover:text-stone-700'
+                  }`}
+                >
+                  <CalendarRange className="mr-1.5 size-4" />
+                  Semaine
                 </Button>
                 <Button
                   onClick={() => setActiveView('today')}
-                  className={`cursor-pointer h-11 rounded-[1rem] text-sm font-medium transition-all duration-200 ${
+                  className={`cursor-pointer h-11 rounded-[1rem] px-1 text-[0.8rem] font-medium transition-all duration-200 ${
                     activeView === 'today'
                       ? 'bg-emerald-600 text-white shadow-[0_4px_14px_rgba(77,133,85,0.30)] hover:bg-emerald-700'
                       : 'bg-transparent text-stone-500 shadow-none hover:bg-stone-100 hover:text-stone-700'
                   }`}
                 >
-                  <Clock3 className="mr-2 size-4" />
-                  Aujourd'hui
+                  <Clock3 className="mr-1.5 size-4" />
+                  Jour
                 </Button>
               </div>
 
-              {/* Calendar / Today panel */}
+              {/* Calendar / Week / Today panel */}
               <div className="overflow-hidden rounded-[1.6rem] border border-stone-100 bg-stone-50/60 shadow-sm">
                 {activeView === 'calendar' ? (
-                  <Calendar
-                    mode="single"
-                    selected={selectedDate}
-                    onSelect={(date: Date | undefined) => setSelectedDate(date)}
-                    onMonthChange={setCalendarMonth}
-                    locale={fr}
-                    modifiers={{ hasEvent: daysWithEvents }}
-                    modifiersClassNames={{ hasEvent: 'day-has-event' }}
-                    className="w-full rounded-[1.4rem] p-3 shadow-none"
-                  />
+                  <>
+                    <Calendar
+                      mode="single"
+                      selected={selectedDate}
+                      onSelect={(date: Date | undefined) => setSelectedDate(date)}
+                      onMonthChange={setCalendarMonth}
+                      locale={fr}
+                      modifiers={{
+                        evtSingle: eventDaysByKind.single,
+                        evtRecurring: eventDaysByKind.recurring,
+                        evtPeriod: eventDaysByKind.period,
+                      }}
+                      className="w-full rounded-[1.4rem] p-3 shadow-none"
+                    />
+                    <div className="flex items-center justify-center gap-4 border-t border-stone-100 px-3 py-2.5 text-[0.68rem] font-medium text-stone-500">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="size-2 rounded-full bg-emerald-500" />
+                        Ponctuel
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="size-2 rounded-full bg-sky-500" />
+                        Récurrent
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="size-2 rounded-full bg-amber-500" />
+                        Période
+                      </span>
+                    </div>
+                  </>
+                ) : activeView === 'week' ? (
+                  <div className="space-y-2 rounded-[1.4rem] p-3">
+                    {/* Week navigation */}
+                    <div className="mb-1 flex items-center justify-between px-1">
+                      <button
+                        type="button"
+                        onClick={() => shiftWeek(-1)}
+                        className="cursor-pointer rounded-full p-1.5 text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-700"
+                        aria-label="Semaine précédente"
+                      >
+                        <ChevronLeft className="size-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setWeekAnchor(new Date())}
+                        className="cursor-pointer rounded-full px-2 py-0.5 text-xs font-semibold capitalize text-stone-700 transition-colors hover:bg-stone-100"
+                      >
+                        {weekRangeLabel}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => shiftWeek(1)}
+                        className="cursor-pointer rounded-full p-1.5 text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-700"
+                        aria-label="Semaine suivante"
+                      >
+                        <ChevronRight className="size-4" />
+                      </button>
+                    </div>
+
+                    {weekDays.map((day) => {
+                      const dayKey = dateKeyFromDate(day)
+                      const dayEvents = eventsForDay(weekEvents, day)
+                      const isToday = dayKey === todayKey
+                      const isSelected = dayKey === selectedDateKey
+                      return (
+                        <button
+                          key={dayKey}
+                          type="button"
+                          onClick={() => setSelectedDate(day)}
+                          className={`flex w-full cursor-pointer items-stretch gap-3 rounded-2xl border p-2.5 text-left transition-all duration-150 ${
+                            isSelected
+                              ? 'border-emerald-300 bg-emerald-50/60 shadow-sm'
+                              : 'border-stone-100 bg-white hover:border-stone-200 hover:bg-stone-50'
+                          }`}
+                        >
+                          <div className={`flex w-12 shrink-0 flex-col items-center justify-center rounded-xl py-1.5 ${isToday ? 'bg-emerald-600 text-white' : 'bg-stone-50 text-stone-700'}`}>
+                            <span className="text-[0.6rem] font-semibold uppercase tracking-wide opacity-80">
+                              {day.toLocaleDateString('fr-FR', { weekday: 'short' })}
+                            </span>
+                            <span className="text-base font-bold leading-tight">{day.getDate()}</span>
+                          </div>
+                          <div className="flex min-w-0 flex-1 flex-col justify-center gap-1 py-0.5">
+                            {dayEvents.length === 0 ? (
+                              <span className="text-xs text-stone-300">Aucun événement</span>
+                            ) : (
+                              dayEvents.slice(0, 4).map((ev) => (
+                                <div key={ev.id} className="flex items-center gap-1.5 text-xs text-stone-700">
+                                  <span className={`size-1.5 shrink-0 rounded-full ${eventKindDotClass[getEventKind(ev)]}`} />
+                                  <span className="truncate">{ev.title}</span>
+                                </div>
+                              ))
+                            )}
+                            {dayEvents.length > 4 ? (
+                              <span className="text-[0.65rem] font-medium text-stone-400">+{dayEvents.length - 4} de plus</span>
+                            ) : null}
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
                 ) : (
                   <div className="rounded-[1.4rem] bg-gradient-to-br from-emerald-50 via-stone-50 to-white p-5">
                     <p className="text-[0.66rem] font-semibold uppercase tracking-[0.26em] text-emerald-600">{surfaceTitle}</p>
@@ -735,7 +908,17 @@ function App() {
                     : 'bg-transparent text-stone-500 shadow-none hover:bg-stone-100 hover:text-stone-700'
                 }`}
               >
-                Calendrier
+                Mois
+              </Button>
+              <Button
+                onClick={() => setActiveView('week')}
+                className={`h-11 flex-1 cursor-pointer rounded-[1rem] text-sm font-medium transition-all duration-200 ${
+                  activeView === 'week'
+                    ? 'bg-emerald-600 text-white shadow-[0_3px_10px_rgba(77,133,85,0.25)] hover:bg-emerald-700'
+                    : 'bg-transparent text-stone-500 shadow-none hover:bg-stone-100 hover:text-stone-700'
+                }`}
+              >
+                Semaine
               </Button>
               <Button
                 onClick={() => setActiveView('today')}
@@ -745,13 +928,15 @@ function App() {
                     : 'bg-transparent text-stone-500 shadow-none hover:bg-stone-100 hover:text-stone-700'
                 }`}
               >
-                Aujourd'hui
+                Jour
               </Button>
               <Button
                 onClick={handleSignOut}
-                className="h-11 cursor-pointer rounded-[1rem] bg-transparent px-4 text-sm text-stone-500 shadow-none hover:bg-rose-50 hover:text-rose-500"
+                size="icon"
+                className="h-11 w-11 shrink-0 cursor-pointer rounded-[1rem] bg-transparent text-stone-500 shadow-none hover:bg-rose-50 hover:text-rose-500"
+                aria-label="Sortie"
               >
-                Sortie
+                <LogOut className="size-4.5" />
               </Button>
             </div>
           </nav>

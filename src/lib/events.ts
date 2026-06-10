@@ -31,6 +31,20 @@ function endOfDayIso(date: string) {
   return new Date(`${date}T23:59:59.999`).toISOString()
 }
 
+export type EventKind = 'single' | 'recurring' | 'period'
+
+// Classifies an event for color-coding: recurring events take priority,
+// then multi-day spans count as "period", everything else is a one-off.
+export function getEventKind(ev: Pick<TrackyEvent, 'recurrence' | 'start_date' | 'end_date'>): EventKind {
+  if (ev.recurrence && ev.recurrence !== 'none') return 'recurring'
+  if (ev.start_date && ev.end_date) {
+    const start = new Date(ev.start_date)
+    const end = new Date(ev.end_date)
+    if (localDateKey(start) !== localDateKey(end)) return 'period'
+  }
+  return 'single'
+}
+
 // Returns all events whose date range overlaps with the given day
 export async function fetchEventsByDate(userId: string, date: string) {
   const { data, error } = await supabase
@@ -50,19 +64,33 @@ export async function fetchEventsByMonth(
   userId: string,
   year: number,
   month: number,
-): Promise<Pick<TrackyEvent, 'id' | 'start_date' | 'end_date'>[]> {
+): Promise<Pick<TrackyEvent, 'id' | 'start_date' | 'end_date' | 'recurrence'>[]> {
   const monthStart = new Date(year, month - 1, 1).toISOString()
   const monthEnd = new Date(year, month, 0, 23, 59, 59, 999).toISOString()
 
   const { data, error } = await supabase
     .from('events')
-    .select('id, start_date, end_date')
+    .select('id, start_date, end_date, recurrence')
     .eq('user_id', userId)
     .lte('start_date', monthEnd)
     .gte('end_date', monthStart)
 
   if (error) throw error
-  return (data ?? []) as Pick<TrackyEvent, 'id' | 'start_date' | 'end_date'>[]
+  return (data ?? []) as Pick<TrackyEvent, 'id' | 'start_date' | 'end_date' | 'recurrence'>[]
+}
+
+// Returns full events overlapping a given date range (for the weekly view)
+export async function fetchEventsByRange(userId: string, startDate: string, endDate: string): Promise<TrackyEvent[]> {
+  const { data, error } = await supabase
+    .from('events')
+    .select('*')
+    .eq('user_id', userId)
+    .lte('start_date', endOfDayIso(endDate))
+    .gte('end_date', startOfDayIso(startDate))
+    .order('start_date', { ascending: true })
+
+  if (error) throw error
+  return (data ?? []) as TrackyEvent[]
 }
 
 export async function createEvent(
